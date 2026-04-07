@@ -7,68 +7,224 @@ description: PLACEHOLDER — user will write trigger description
 
 ## Overview
 
-UserScripts are JavaScript programs that run in the browser via a userscript manager (Tampermonkey, Violentmonkey, or Greasemonkey). They modify web page behavior and appearance by injecting code into matched URLs. This skill provides the procedural knowledge, API reference, and patterns needed to write correct, secure, cross-manager-compatible userscripts.
+UserScripts are JavaScript programs that run in the browser via a userscript manager (Tampermonkey, Violentmonkey, or Greasemonkey). They modify web page behavior and appearance by injecting code into matched URLs. This skill covers both the knowledge and the agentic development workflow needed to build userscripts iteratively using browser automation tools.
 
-## Development Approach
+## Development Principles
 
-Internalize these principles before writing any code. They shape every decision downstream.
-
-### The Development Loop (Agentic Reality)
-
-There is no autonomous access to installing or running a userscript in-manager. The development loop is:
-
-1. **Write code** — draft the script with the full `==UserScript==` metadata block, but understand the GM_* APIs won't be available during console testing
-2. **Test via browser console injection** — paste the script body (without the metadata block) into the browser's DevTools console on the target page. Stub out any GM_* calls as needed (e.g., `const GM_getValue = (k, d) => d;`)
-3. **Iterate** — fix issues found during console testing. Do not defer problems to "later when it's in the manager"
-4. **User assists with in-manager testing** — once core functionality works in-console, the user installs the full script in Tampermonkey/Violentmonkey and reports back
-
-This means: write the script to be testable. Keep the GM_* API surface small so stubbing is easy. Fix everything fixable before handing off to the user for in-manager testing.
+Internalize these before writing any code.
 
 ### Assume SPA Until Proven Otherwise
 
-No page can be trusted to be fully server-rendered anymore. SPA/CSR, `fetch()` content loading, lazy loading, and infinite scroll are everywhere. Unless there is strong evidence the target site uses traditional server-side rendering on all relevant pages, default to using MutationObserver from the start. Do not deregister the main MutationObserver — pushState and hash-based navigation do not reload the userscript.
+Unless there is strong evidence the target site uses traditional server-side rendering, default to using MutationObserver from the start. SPA/CSR, `fetch()` content loading, lazy loading, and infinite scroll are everywhere. Do not deregister the main MutationObserver — pushState and hash-based navigation do not reload the userscript.
 
-### Error Handling Philosophy
+### Selector Resilience
+
+Think like a QA engineer writing stable browser tests:
+- **Best:** Structural/semantic — `article`, `header > nav[aria-label="main"]`, `[role="dialog"]`, `[data-testid="specific-name"]`
+- **Acceptable:** Human-written descriptive classes — `.user-profile-card`, `.comment-body`
+- **Last resort:** Framework-generated classes — `.css-1a2b3c` — only in unique "signature" combinations
+- **Avoid:** Randomized IDs, deep positional selectors, auto-generated anything
+
+A complex matching strategy targeting stable landmarks is better than a simple one targeting fragile selectors. For more detail, read `references/practical-guidance.md` (Selector Stability Deep Dive).
+
+### Namespace Everything
+
+Use `x-userjs-` prefixes on injected element IDs, class names, and data attributes. Wrap the script body in an IIFE or block scope. Placing anything on `window` should be intentional.
+
+### Keep GM_* Surface Small
+
+During agentic development, code runs via `javascript_tool` where GM_* APIs are not available. Design the script so that most logic works without GM_* calls. This makes iterative development faster and reduces stubbing. The GM_* integration layer can be thin and added late.
+
+### Error Handling
 
 Define a debug logging function and use it liberally:
 ```javascript
 const DEBUG = true;
-function logdebug(...args) { if (DEBUG) console.log('[MyScript]', ...args); }
+const logdebug = DEBUG ? console.log.bind(console, '[MyScript]') : () => {};
 ```
 
-Do not silently swallow exceptions except genuinely expected ones in tight loops or fast timers (and even then, consider `logdebug`). For all other cases, use `console.warn` or `console.error`. But never re-throw or leave uncaught exceptions in code paths that would break the page's own functionality.
-
-### Selector Resilience
-
-Think like a QA engineer writing stable browser tests. Prefer selectors that will survive site updates:
-- **Best:** Structural/semantic selectors — `article`, `header > nav[aria-label="main"]`, `[role="dialog"]`, `[data-testid="specific-name"]` (when the testid looks intentional and stable)
-- **Acceptable:** Human-written, descriptive class names that look stable — `.user-profile-card`, `.comment-body`
-- **Last resort:** Framework-generated class names — `.css-1a2b3c`, `._3xKp2` — only when used in unique "signature" combinations
-- **Avoid:** Randomized IDs, deeply nested positional selectors (`div > div > div:nth-child(3)`), anything that looks auto-generated
-
-A complex matching strategy targeting stable page landmarks is far better than a simple one targeting fragile selectors.
-
-### Namespace Everything
-
-Use `x-userjs-` prefixes on injected element IDs, class names, and data attributes to avoid collisions with the page. Use an IIFE or block scope to keep variables and functions out of the global/window namespace. Placing anything on `window` should be intentional and purposeful.
+Do not silently swallow exceptions. Use `console.warn` or `console.error` for real problems. Never re-throw or leave uncaught exceptions that would break the page.
 
 ### Priority Order
 
-When making trade-offs during development:
-1. **Do not break site functionality** in ways that matter (free to break things during development iterations)
-2. **Do not break site layout** in ways that matter (free to break things during development iterations)
-3. **Implement the userscript's functional requirements** to the best of available abilities — consult with the user if a feature is proving too complex, to explore functional compromises or alternative approaches
+When making trade-offs:
+1. **Do not break site functionality** (free to break things during dev iterations)
+2. **Do not break site layout** (free to break things during dev iterations)
+3. **Implement the functional requirements** — consult with the user if a feature is proving too complex
 4. **Match the page's visual style** — the result should look like it belongs
 
 ### When Stuck
 
-If a particularly tricky aspect of implementation is consuming excessive effort, consult with the user. Often the functional requirement can be relaxed, an alternative approach exists that wasn't obvious, or the user has domain knowledge about the target site that changes the picture. Do not grind silently on a hard problem when a conversation might dissolve it.
+If a tricky aspect of implementation is consuming excessive effort, consult with the user. Often the requirement can be relaxed, an alternative approach exists, or the user has domain knowledge that changes the picture. If you've iterated on the same problem ~20 times, describe the challenge and ask for ideas.
 
-For deeper development guidance including testing workflow, optimization philosophy, and working with page primitives, read `references/practical-guidance.md`.
+## Agentic Development Workflow
 
-### Starter Template
+This is the primary development strategy when browser automation tools are available. Use `localStorage` as a persistent workspace to store code chunks, enabling rapid iteration without regenerating working code.
 
-This template embodies the principles above — scoped closure, debug logging, DOM query helpers, XPath support, and a persistent MutationObserver. Start every userscript from this skeleton:
+### Why localStorage
+
+1. **Persist code across page reloads** — no need to regenerate code that already works
+2. **Iterate incrementally** — fix/update individual chunks without rewriting everything (saves tokens and time)
+3. **Test quickly** — reload the page and re-execute all chunks from a fresh DOM state with a single command
+4. **Easy export** — user retrieves the assembled userscript instantly via a console command
+
+### Setting Up the Workspace
+
+At the start of a session, store a userscript generator function in localStorage. This function concatenates all chunks and assembles them into a complete `.user.js` file:
+
+```javascript
+// Store the generator under this key:
+// localStorage key: claude_dev_assemble_userscript
+
+(() => {
+    let header = `
+    // ==UserScript==
+    // @name         {{userscriptName}}
+    // @namespace    https://greasyfork.org/en/users/1337417-mevanlc
+    // @version      0.1
+    // @description  {{userscriptDescription}}
+    // @author       mevanlc
+    // @match        {{urlMatchPattern}}
+    // @grant        none
+    // @run-at       document-end
+    // @license      MIT
+    // ==/UserScript==
+    `;
+
+    let claudeDevChunkNames = Object.keys(localStorage).filter(k => k.startsWith('claude_dev_chunk:')).sort();
+    let body = claudeDevChunkNames.map(k => localStorage.getItem(k)).join('\n\n');
+    return header + '\n' + body;
+})();
+```
+
+Fill in the `{{placeholders}}` with actual values for the userscript being developed. Adjust `@grant`, `@run-at`, and other metadata as needed for the specific script.
+
+### Working with Chunks
+
+Store individual pieces of the userscript under `localStorage` keys prefixed with `claude_dev_chunk:`. Chunks are sorted alphabetically by key, so use `!` and `~` for first/last ordering:
+
+```
+claude_dev_chunk:!            - Always injects first (initialization, shared utilities)
+claude_dev_chunk:styles       - CSS styles
+claude_dev_chunk:hideElements - DOM manipulation
+claude_dev_chunk:keyboard     - Keyboard shortcuts
+claude_dev_chunk:lightbox     - Modal/dialog functionality
+claude_dev_chunk:~            - Always injects last (final setup, observers)
+```
+
+Each chunk is a string of JavaScript code that can be passed to `eval()` or used as the body of a `document.createElement('script')`.
+
+**Chunk organization is flexible.** The number and granularity of chunks should match the task. Split sections under heavy development into separate chunks for easier iteration. For some tasks, one chunk per function makes sense. Refactor chunks at any time — copy values between keys, concatenate, rename, split, delete. Make surgical edits to individual chunks using regex search/replace or string manipulation.
+
+### Reading Form Element Values
+
+The `read_page` and `get_page_text` tools often do not show the `.value` of form elements (`TEXTAREA`, `INPUT`, etc.). Use `javascript_tool` to read their contents:
+
+```javascript
+document.querySelector('#myTextarea').value
+```
+
+This comes up frequently when working on pages with forms — don't assume `read_page` gave you the full picture.
+
+### The Development Loop
+
+1. **Analyze the page** — use `read_page`, `javascript_tool`, and screenshots to understand the DOM structure, find stable selectors, and identify the elements to modify
+2. **Create chunks** — build reusable code with observable effects that allow verification (think Unix philosophy: each chunk should do one thing and show that it worked)
+3. **Test by executing** — run chunks via `javascript_tool` and verify results with screenshots
+4. **Reload and verify** — periodically reload the page (navigate to the original URL, don't call `.reload()` which can trigger SPA URL modifications) to confirm everything works from a fresh DOM state
+5. **Iterate** — fix/update individual chunks without touching the ones that already work
+
+**Dogfooding:** When testing the full script during development, run it through the generator to ensure you're testing exactly what the user will get:
+```javascript
+eval(localStorage.getItem('claude_dev_assemble_userscript'));
+```
+
+### GM_* APIs During Development
+
+GM_* functions are not available when running code via `javascript_tool` or `eval()` in the page context. Strategies:
+
+- **Design around it:** Structure the script so most logic (DOM manipulation, CSS injection, event handling, observers) doesn't need GM_* at all
+- **Stub when needed:** For chunks that must reference GM_* during testing:
+  ```javascript
+  const GM_getValue = (key, def) => def;
+  const GM_setValue = (key, val) => console.log('[STUB] GM_setValue:', key, val);
+  const GM_addStyle = (css) => { const s = document.createElement('style'); s.textContent = css; document.head.appendChild(s); return s; };
+  ```
+- **Defer GM_* integration:** Add the GM_* layer (persistent storage, cross-origin requests, menu commands) after the core functionality works. This layer is typically thin and can be verified during in-manager testing
+
+### Common Chunk Patterns
+
+**CSS injection:**
+```javascript
+(function() {
+    const style = document.createElement('style');
+    style.id = 'x-userjs-myscript-styles';
+    style.textContent = `
+        .unwanted { display: none !important; }
+        #target { position: fixed !important; }
+    `;
+    document.head.appendChild(style);
+    return 'Styles injected';
+})();
+```
+
+**DOM manipulation:**
+```javascript
+(function() {
+    document.querySelectorAll('.unwanted').forEach(el => el.style.display = 'none');
+    const label = document.querySelector('#myLabel');
+    if (label) label.textContent = 'New Label';
+    return 'Elements modified';
+})();
+```
+
+**Keyboard shortcuts:**
+```javascript
+(function() {
+    document.addEventListener('keydown', function(e) {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            myFunction();
+        }
+    });
+    return 'Keyboard shortcuts added';
+})();
+```
+
+**Waiting for elements:**
+```javascript
+(function() {
+    setTimeout(() => {
+        const el = document.querySelector('.dynamic-element');
+        if (el) {
+            // Do something
+        }
+    }, 500);
+    return 'Deferred setup scheduled';
+})();
+```
+
+### Before Declaring Done
+
+- **Verify by reloading** — navigate to the original URL and run the assembled script from scratch
+- **Test the intended functionality** — don't assume, check
+- **Take screenshots** at key stages, especially the final result
+- **Look for discrepancies** between expected and actual behavior
+- **Guide the user to retrieve the code** — do not dump the script into chat. Instead:
+  ```javascript
+  // User runs this in DevTools console:
+  copy(eval(localStorage.getItem('claude_dev_assemble_userscript')));
+  ```
+
+### Userscript Publishing
+
+If the user asks for help with publishing the userscript, read this guide document for detailed instructions:
+
+https://gist.github.com/mike-clark-8192/0c2e3e7fa248c8c6688094b5d5ac9597
+
+## Starter Template
+
+This template embodies the development principles — scoped closure, debug logging, DOM query helpers, XPath support, and a persistent MutationObserver. Start every userscript from this skeleton:
 
 ```javascript
 // ==UserScript==
@@ -105,114 +261,90 @@ This template embodies the principles above — scoped closure, debug logging, D
 })();
 ```
 
-Adapt this template for each new script. Add `@grant` declarations and GM_* calls as needed.
+Adapt for each script. Add `@grant` declarations and GM_* calls as needed.
 
-## Workflow: Writing a UserScript
+## Writing the Script
 
-### 1. Define the Metadata Block
+### Metadata Block
 
-Every userscript begins with a `==UserScript==` metadata block in line comments. Start from this template and adjust:
-
-```javascript
-// ==UserScript==
-// @name        Script Name
-// @namespace   https://example.com/
-// @version     1.0.0
-// @description Brief description of what the script does
-// @author      Author Name
-// @match       *://www.example.com/*
-// @grant       none
-// @run-at      document-idle
-// ==/UserScript==
-```
-
-**Essential tags for every script:**
+Every userscript begins with a `==UserScript==` metadata block. Essential tags:
 
 | Tag | Purpose | Notes |
 |-----|---------|-------|
 | `@name` | Script identifier | Unique within namespace |
-| `@match` | URL pattern to run on | Always prefer `@match` over `@include` |
+| `@match` | URL pattern | Always prefer over `@include` |
 | `@grant` | API permissions | `none` for minimal sandbox; add specific GM_* as needed |
 | `@version` | Semantic version | Required for auto-updates |
-| `@run-at` | Injection timing | `document-idle` (default safe choice), `document-end`, `document-start` |
+| `@run-at` | Injection timing | `document-idle` (default safe), `document-end`, `document-start` |
 
-**@match pattern quick reference:**
+**@match quick reference:**
 - `*://www.example.com/*` — http and https, specific domain
 - `*://*.example.com/*` — all subdomains
-- `*://www.example.tld/*` — all TLDs (.com, .co.uk, etc.)
-- Ignores query strings and hash fragments
+- Multiple `@match` lines for multiple patterns
 
-For the complete tag reference with all options, cross-manager notes, and pattern syntax details, read `references/metadata-block.md`.
+For the complete tag reference, read `references/metadata-block.md`.
 
-### 2. Determine Required Permissions
+### Permissions
 
-Start with `@grant none` and add permissions only as needed. Each `@grant` declaration enables a specific GM_* function.
-
-**Common grant combinations by task:**
+Start with `@grant none` and add permissions only as needed:
 
 | Task | Required Grants |
 |------|----------------|
 | Modify page CSS | `@grant GM_addStyle` |
-| Store persistent data | `@grant GM_setValue` + `@grant GM_getValue` |
+| Store persistent data | `@grant GM_getValue` + `@grant GM_setValue` |
 | Cross-origin API calls | `@grant GM_xmlhttpRequest` + `@connect targetdomain.com` |
 | Add menu commands | `@grant GM_registerMenuCommand` |
 | Access page JS objects | `@grant unsafeWindow` |
-| Detect SPA navigation | `@grant window.onurlchange` (Tampermonkey) |
 
-When `@grant` specifies any value other than `none`, the script runs in a sandbox with access only to granted APIs. With `@grant none`, the script shares the page's JavaScript context directly — simpler but with no GM_* API access (except `GM_info`).
+When `@grant` specifies any value other than `none`, the script runs in a sandbox. With `@grant none`, the script shares the page's JavaScript context directly.
 
-For the full API reference with function signatures, parameters, and usage notes, read `references/gm-api.md`.
+For the full API reference, read `references/gm-api.md`.
 
-### 3. Write the Script Body
+### Script Body Patterns
 
 Select the appropriate pattern for the task:
 
-**DOM modification and CSS injection** — Hide elements, restyle pages, add UI components. Use `GM_addStyle` for CSS and standard DOM APIs for element manipulation.
-→ For patterns and CSP bypass techniques, read `references/css-and-dom-injection.md`
+| Scenario | Reference File |
+|----------|---------------|
+| CSS injection, element creation, CSP bypass | `references/css-and-dom-injection.md` |
+| SPA sites, dynamic DOM, MutationObserver | `references/spa-and-dynamic-dom.md` |
+| Cross-origin requests, CORS bypass | `references/cross-origin-and-network.md` |
+| Persistent storage and state | `references/gm-api.md` (Storage section) |
+| Security review, unsafeWindow, SRI | `references/security.md` |
+| Manager differences, MV3, compatibility | `references/manager-compatibility.md` |
+| Development workflow, testing, optimization | `references/practical-guidance.md` |
 
-**SPA and dynamic content handling** — For sites like YouTube, GitHub, or Twitter where content loads dynamically without full page reloads. Use MutationObserver to detect changes and manage observer lifecycle.
-→ For MutationObserver patterns and SPA strategies, read `references/spa-and-dynamic-dom.md`
+### Edge Case Checklist
 
-**Cross-origin API requests** — Fetch data from external APIs that would normally be blocked by CORS. Use `GM_xmlhttpRequest` with `@connect` declarations.
-→ For request patterns and MV3 considerations, read `references/cross-origin-and-network.md`
-
-**Persistent storage and state** — Save user preferences, track state across sessions. Use `GM_setValue`/`GM_getValue` for key-value storage.
-→ Covered in the Storage section of `references/gm-api.md`
-
-**@require for external libraries** — Prefer native browser APIs and GM_* functions where practical. Only `@require` external libraries when they provide high impact for the specific task (e.g., a complex date manipulation library). Always pin versions and use SRI hashes.
-
-### 4. Handle Edge Cases
-
-Review this checklist before finalizing:
+Review before finalizing:
 
 - [ ] **Iframes**: Add `@noframes` unless the script must run inside iframes
 - [ ] **Timing**: Verify `@run-at` matches the use case — `document-start` has no DOM; `document-idle` waits for full load
 - [ ] **External domains**: Add `@connect` for every domain accessed via `GM_xmlhttpRequest`
 - [ ] **Dependency integrity**: Add SRI hashes to `@require` and `@resource` URLs
-- [ ] **SPA sites**: If the target is an SPA, match the entire domain and handle route changes in code
+- [ ] **SPA sites**: Match the entire domain and handle route changes in code
 - [ ] **CSP**: If the target site has a strict Content Security Policy, use `GM_addStyle`/`GM_addElement` instead of inline injection
 
-### 5. Review and Validate
+## Console Testing (Non-Agentic)
 
-Run `scripts/validate-metadata.sh` against the script to catch common metadata errors.
+When browser automation tools are not available, or for acceptance testing with the user after the agentic workflow:
 
-For a security review of the script, consult `references/security.md`. Key items:
-- No `eval()` or `innerHTML` with untrusted data
-- `unsafeWindow` access is justified and safe
-- External data is treated as untrusted
-- `@grant none` is intentional, not accidental
+1. Paste the script body (without the metadata block) into the browser's DevTools console on the target page
+2. Stub GM_* calls as needed (see stubs in the GM_* APIs During Development section above)
+3. Fix issues found during console testing
+4. User installs the full script in Tampermonkey/Violentmonkey and reports back
 
-For cross-manager compatibility concerns, consult `references/manager-compatibility.md`.
+Note: GM_* APIs are not available in the console. Keep the GM_* surface small so stubbing is easy.
 
 ## Common Mistakes
 
-1. **Using `@include` instead of `@match`** — `@match` is stricter and safer. Use it exclusively unless regex matching is genuinely required.
-2. **Forgetting `@connect`** — `GM_xmlhttpRequest` silently fails without a matching `@connect` declaration for the target domain.
-3. **Using `@grant none` then calling GM_* functions** — With `@grant none`, no GM_* APIs are available (except `GM_info`). Add specific grants.
-4. **Not handling SPA navigation** — Scripts only execute on "hard" navigations. SPA route changes require MutationObserver or URL change listeners.
-5. **`@run-at document-start` with DOM operations** — The DOM does not exist yet at `document-start`. Use `document-end` or `document-idle` for DOM manipulation, or wait for elements explicitly.
-6. **Missing `@noframes`** — Without it, the script runs in every iframe on the page, potentially causing duplicated effects or errors.
-7. **`@require` without version pinning** — Unpinned CDN URLs can serve breaking changes. Always pin to a specific version and add SRI hash.
+1. **Using `@include` instead of `@match`** — `@match` is stricter and safer
+2. **Forgetting `@connect`** — `GM_xmlhttpRequest` silently fails without a matching `@connect`
+3. **Using `@grant none` then calling GM_* functions** — no GM_* APIs available with `@grant none` (except `GM_info`)
+4. **Not handling SPA navigation** — scripts only execute on "hard" navigations; SPA route changes need MutationObserver or URL change listeners
+5. **`@run-at document-start` with DOM operations** — the DOM does not exist yet at `document-start`
+6. **Missing `@noframes`** — without it, the script runs in every iframe on the page
+7. **`@require` without version pinning** — unpinned CDN URLs can serve breaking changes; always pin and add SRI hash
 
 ## Reference Map
 
@@ -226,6 +358,7 @@ For cross-manager compatibility concerns, consult `references/manager-compatibil
 | Security review, unsafeWindow, SRI | `references/security.md` |
 | Manager differences, MV3, compatibility | `references/manager-compatibility.md` |
 | Development workflow, testing, optimization | `references/practical-guidance.md` |
+| Legacy escaping workarounds (Claude Chrome) | `references/legacy-escaping.md` |
 
 ## Examples
 
