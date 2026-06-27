@@ -131,8 +131,10 @@ This comes up frequently when working on pages with forms — don't assume `read
 1. **Analyze the page** — use `read_page`, `javascript_tool`, and screenshots to understand the DOM structure, find stable selectors, and identify the elements to modify
 2. **Create chunks** — build reusable code with observable effects that allow verification (think Unix philosophy: each chunk should do one thing and show that it worked)
 3. **Test by executing** — run chunks via `javascript_tool` and verify results with screenshots
-4. **Reload and verify** — periodically reload the page (navigate to the original URL, don't call `.reload()` which can trigger SPA URL modifications) to confirm everything works from a fresh DOM state
+4. **Reload to recover from dev-time mistakes** — userscript development involves mistakes that mutate the DOM in unexpected ways. When that happens, reload the page (navigate to the original URL; don't call `.reload()` which can trigger SPA URL modifications) rather than writing code to repair or undo the damage. Repair code is throwaway — the production script's job is to not make those mistakes in the first place, so any DOM-fix logic you write during dev will be deleted before shipping. Trying to manually un-muddy the DOM also tends to layer mistakes on mistakes. `localStorage` chunks survive the reload, so you lose no real progress.
 5. **Iterate** — fix/update individual chunks without touching the ones that already work
+
+**Batch browser tool calls.** The chunked rhythm `store → assemble-eval → inspect` naturally fits one `browser_batch` call. Default to batching whenever you know what to inspect in advance — it is significantly faster than issuing the steps one at a time, and explicit `setTimeout`-wrapped promises handle async settling inside a batch just as well as between separate calls. See `references/claude-chrome-batching.md` for batching patterns, common misconceptions about settling, and when *not* to batch.
 
 **Dogfooding:** When testing the full script during development, run it through the generator to ensure you're testing exactly what the user will get:
 ```javascript
@@ -358,6 +360,7 @@ Note: GM_* APIs are not available in the console. Keep the GM_* surface small so
 | Security review, unsafeWindow, SRI | `references/security.md` |
 | Manager differences, MV3, compatibility | `references/manager-compatibility.md` |
 | Development workflow, testing, optimization | `references/practical-guidance.md` |
+| Batching browser tool calls during agentic development | `references/claude-chrome-batching.md` |
 | Legacy escaping workarounds (Claude Chrome) | `references/legacy-escaping.md` |
 
 ## Examples
